@@ -1,15 +1,15 @@
-use serde_json::{Result, Value};
+use serde_json::Value;
 use clap::Parser;
 
-fn deserialize_json(filename: String) -> Result<Value> {
+fn deserialize_json(filename: String) -> Value {
 
     let contents = std::fs::read_to_string(filename)
         .expect("Not able to read ion.json");
 
-    let data: Value = serde_json::from_str(&contents);
+    let data: Value = serde_json::from_str(&contents)
         .expect("Not able to parse ion.json");
 
-    Ok(data)
+    data
 }
 
 fn parse_instructions(instructions: &Vec<Value>) -> String {
