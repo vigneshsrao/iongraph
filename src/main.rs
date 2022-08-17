@@ -1,18 +1,32 @@
 use serde_json::Value;
 use clap::Parser;
 
+macro_rules! unwrap {
+    ($result: expr, $message: expr) => {
+        match $result {
+            Ok(res)  => res,
+            Err(err) => {
+                println!("[-] {}: {}", $message, err);
+                std::process::exit(-1);
+            }
+        }
+    };
+}
+
 fn deserialize_json(filename: String) -> Value {
 
-    let contents = std::fs::read_to_string(filename)
-        .expect("Not able to read ion.json");
+    let contents = unwrap!(
+        std::fs::read_to_string(filename),
+        "Not able to read json file");
 
-    let data: Value = serde_json::from_str(&contents)
-        .expect("Not able to parse ion.json");
+    let data = unwrap!(
+        serde_json::from_str(&contents),
+        "Not able to parse ion.json");
 
     data
 }
 
-fn parse_instructions(instructions: &Vec<Value>) -> String {
+fn parse_instructions(instructions: &Vec<Value>) -> Option<String> {
 
     let mut debugout = String::new();
 
@@ -23,7 +37,7 @@ fn parse_instructions(instructions: &Vec<Value>) -> String {
     let mut opcode_len  = 0;
     let mut operand_len = 0;
     for instr in instructions.into_iter() {
-        let instruction = instr["opcode"].as_str().unwrap();
+        let instruction = instr["opcode"].as_str()?;
         let (opcode, operand) = match instruction.split_once(" ") {
             Some((opcode, operand)) =>  (opcode, operand),
             None => (instruction, "")
@@ -40,8 +54,8 @@ fn parse_instructions(instructions: &Vec<Value>) -> String {
 
     // Now go through each instruction in this block and parse that.
     for instr in instructions.into_iter() {
-        let id     = instr["id"].as_u64().unwrap();
-        let instruction = instr["opcode"].as_str().unwrap();
+        let id     = instr["id"].as_u64()?;
+        let instruction = instr["opcode"].as_str()?;
         let (opcode, operand) = match instruction.split_once(" ") {
             Some((opcode, operand)) =>  (opcode, operand),
             None => (instruction, "")
@@ -52,20 +66,20 @@ fn parse_instructions(instructions: &Vec<Value>) -> String {
                              opw = opcode_len + 5, orw = operand_len + 5);
     }
 
-    debugout
+    Some(debugout)
 }
 
-fn parse_blocks(blocks: &Vec<Value>) -> String {
+fn parse_blocks(blocks: &Vec<Value>) -> Option<String> {
 
     let mut debugout = String::new();
 
     for block in blocks.into_iter() {
         debugout += &format!("\n      Block#{}\n", block["number"]);
 
-        let instructions = block["instructions"].as_array().unwrap();
-        debugout += &parse_instructions(instructions);
+        let instructions = block["instructions"].as_array()?;
+        debugout += &parse_instructions(instructions)?;
 
-        let successors = block["successors"].as_array().unwrap();
+        let successors = block["successors"].as_array()?;
 
         if successors.len() == 1 {
             debugout += &format!("          Successor: Block#{}\n", successors[0]);
@@ -82,10 +96,10 @@ fn parse_blocks(blocks: &Vec<Value>) -> String {
         }
     }
 
-    debugout
+    Some(debugout)
 }
 
-fn parse_passes(passes: &Vec<Value>) -> String {
+fn parse_passes(passes: &Vec<Value>) -> Option<String> {
 
     let mut debugout = String::new();
 
@@ -95,11 +109,29 @@ fn parse_passes(passes: &Vec<Value>) -> String {
         // Fetch the basic blocks in this pass and parse them. We are only
         // looking at MIR code now.
         // TODO: Add support for LIR as well
-        let mirblocks = pass["mir"]["blocks"].as_array().unwrap();
-        debugout += &parse_blocks(mirblocks);
+        let mirblocks = pass["mir"]["blocks"].as_array()?;
+        debugout += &parse_blocks(mirblocks)?;
     }
 
-    debugout
+    Some(debugout)
+}
+
+fn parse_graph(iondata: Value) -> Option<String> {
+
+    // This will hold the output disassembly
+    let mut debugout = String::new();
+
+    // Go through all the functions that were ion compiled
+    for func in iondata["functions"].as_array()?.into_iter() {
+        debugout += &format!("\n\nGraph for Function: {}", func["name"]);
+
+        // Fetch the optimization passes that ran on this function and parse
+        // them
+        let passes = func["passes"].as_array()?;
+        debugout += &parse_passes(passes)?;
+    }
+
+    Some(debugout)
 }
 
 /// Simple script to convert the ion.json file into a text based IR form
@@ -117,6 +149,7 @@ struct Args {
 
 }
 
+
 fn main() {
 
     let args = Args::parse();
@@ -124,20 +157,15 @@ fn main() {
     // Parse the ion.json file into the program
     let iondata = deserialize_json(args.ionfile);
 
-    // This will hold the output disassembly
-    let mut debugout = String::new();
+    let debugout = if let Some(output) = parse_graph(iondata) {
+        output
+    } else {
+        println!("[-] Invalid ion logs json file encountered");
+        std::process::exit(-1);
+    };
 
-    // Go through all the functions that were ion compiled
-    for func in iondata["functions"].as_array().unwrap().into_iter() {
-        debugout += &format!("\n\nGraph for Function: {}", func["name"]);
-
-        // Fetch the optimization passes that ran on this function and parse
-        // them
-        let passes = func["passes"].as_array().unwrap();
-        debugout += &parse_passes(passes);
-    }
-
-    std::fs::write(args.outfile, debugout)
-        .expect("unable to write output");
+    let _ = unwrap!(
+        std::fs::write(args.outfile, debugout),
+        "unable to write output");
 
 }
